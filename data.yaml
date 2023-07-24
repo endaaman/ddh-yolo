@@ -1,0 +1,5 @@
+train: data/yolo/train/images
+val: data/yolo/valid/images
+
+nc: 6
+names: [ 'cat' ] # クラス名
