@@ -1,5 +1,4 @@
-train: data/yolo/train/images
-val: data/yolo/valid/images
-
+train: ../data/yolo/train
+val: ../data/yolo/test
 nc: 6
-names: [ 'cat' ] # クラス名
+names: [ 'left-top', 'left-outer', 'left-inner', 'right-top', 'right-outer', 'right-inner', ]

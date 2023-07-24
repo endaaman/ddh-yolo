@@ -1,0 +1,10 @@
+train: ../data/yolo/fold4/train
+val: ../data/yolo/fold4/test
+nc: 6
+names:
+  - left-top
+  - left-outer
+  - left-inner
+  - right-top
+  - right-outer
+  - right-inner
