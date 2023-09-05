@@ -1,5 +1,5 @@
-train: ../data/folds6/fold5/train
-val: ../data/folds6/fold5/test
+train: ../data/folds6/fold6/train
+val: ../data/folds6/fold6/test
 nc: 6
 names:
   - left-top

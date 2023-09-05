@@ -1,5 +1,5 @@
-train: ../data/yolo/fold3/train
-val: ../data/yolo/fold3/test
+train: ../data/folds6/fold3/train
+val: ../data/folds6/fold3/test
 nc: 6
 names:
   - left-top
