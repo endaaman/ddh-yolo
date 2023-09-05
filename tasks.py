@@ -1,4 +1,5 @@
 import invoke
+from glob import glob
 
 @invoke.task
 def train_all(c):
@@ -15,3 +16,14 @@ def train_all(c):
 
         invoke.run(cmd)
         # print(cmd)
+
+
+@invoke.task
+def detect_all(c):
+    for i in range(6):
+        NUM = i + 1
+        cmd = f'python yolov5/detect.py --source "data/folds6/fold{NUM}/test/images/*.jpg"' \
+            f' --weight yolov5/runs/train/fold{NUM}/weights/best.pt --hide-label --name fold{NUM}' \
+            f' --save-txt --exist-ok'
+        print(f'CMD: {cmd}')
+        invoke.run(cmd)
