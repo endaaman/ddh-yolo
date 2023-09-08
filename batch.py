@@ -1,11 +1,16 @@
 import os
 import shutil
+from glob import glob
+from itertools import combinations
 
 import numpy as np
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from sklearn.model_selection import StratifiedKFold
 from pydantic import Field
+from matplotlib import pyplot as plt
+from tqdm import tqdm
+from mean_average_precision import MetricBuilder
 
 from endaaman.ml import BaseMLCLI
 
@@ -42,6 +47,58 @@ def write_bbs(bbs, filename):
         f.write(text)
 
 
+def read_label_as_df(path, with_confidence=False):
+    with open(path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+
+    cols = ['label', 'x0', 'y0', 'x1', 'y1']
+    if with_confidence:
+        cols += ['conf']
+    data = []
+    for line in lines:
+        parted  = line.split(' ')
+        class_id = int(parted[0]) + 1
+        center_x, center_y, w, h = [float(v) for v in parted[1:5]]
+        data.append([
+            # convert yolo to pascal voc
+            class_id,
+            center_x - w / 2,
+            center_y - h / 2,
+            center_x + w / 2,
+            center_y + h / 2,
+        ])
+        if with_confidence:
+            data[-1].append(float(parted[-1][:-1]))
+    return pd.DataFrame(columns=cols, data=data)
+
+
+# def bbdf_to_str(df):
+#     lines = []
+#     for idx, row in df.iterrows():
+#         x0, y0, x1, y1 = row[['x0', 'y0', 'x1', 'y1']]
+#         cls_ = row['label']
+#         x = (x1 - x0) / 2
+#         y = (y1 - y0) / 2
+#         w = x1 - x0
+#         h = y1 - y0
+#         line = f'{cls_} {x:.6f} {y:.6f} {w:.6f} {h:.6f}'
+#         lines.append([cls_, line])
+#     lines = sorted(lines, key=lambda v:v[0])
+#     return '\n'.join([l[1] for l in lines])
+
+
+
+def calc_iou(box1, box2):
+    intersection_x1 = max(box1[0], box2[0])
+    intersection_y1 = max(box1[1], box2[1])
+    intersection_x2 = min(box1[2], box2[2])
+    intersection_y2 = min(box1[3], box2[3])
+    intersection_width = max(0, intersection_x2 - intersection_x1)
+    intersection_height = max(0, intersection_y2 - intersection_y1)
+    area_box1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    area_box2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+    iou = (intersection_width * intersection_height) / (area_box1 + area_box2 - (intersection_width * intersection_height))
+    return iou
 
 class CLI(BaseMLCLI):
     def run_copy(self, a):
@@ -57,6 +114,20 @@ class CLI(BaseMLCLI):
             dest_label = f'data/yolo/{subdir}/labels/{label}.txt'
             shutil.copyfile(src_image, dest_image)
             shutil.copyfile(src_label, dest_label)
+
+    def run_crop512(self, a):
+        for fold in range(1, 7):
+            for t in ['train', 'test']:
+                src = f'data/folds6/fold{fold}/{t}/images/'
+                dest = f'data/folds6_512/fold{fold}/{t}/images/'
+                os.makedirs(dest, exist_ok=True)
+                O = (624 - 512) // 2
+                S = 512
+                for p in tqdm(sorted(glob(J(src, '*.jpg')))):
+                    name = os.path.basename(p)
+                    i = Image.open(p)
+                    i2 = i.crop((O, O, S+O, S+O))
+                    i2.save(J(dest, name))
 
     class ViewArgs(BaseMLCLI.CommonArgs):
         label: str = '0001'
@@ -111,11 +182,11 @@ class CLI(BaseMLCLI):
 
 
     class SplitFoldArgs(BaseMLCLI.CommonArgs):
-        count: int = 5
+        count: int
         flip: bool = Field(False, cli=('--flip', ))
 
     def run_split_fold(self, a):
-        df = pd.read_excel('data/table.xlsx', converters={'label': str})
+        df = pd.read_excel('data/tables/main.xlsx', converters={'label': str})
 
         skf = StratifiedKFold(n_splits=a.count, shuffle=True, random_state=a.seed)
         skf.get_n_splits(df, df['treatment'])
@@ -154,6 +225,130 @@ class CLI(BaseMLCLI):
                     write_bbs(bbs, f'{subdir}/labels/f{label}.txt')
 
 
+    def run_sort_labels(self, a):
+        counts = []
+        gt_dfs = {}
+
+        metric_fn = MetricBuilder.build_evaluation_metric("map_2d", async_mode=True, num_classes=7)
+
+        total = 0
+        correct_50 = 0
+
+        for p in sorted(glob('data/labels/0*.txt')):
+            id = os.path.splitext(os.path.basename(p))[0]
+            df = read_label_as_df(p)
+            gt_dfs[id] = df
+
+        for p in sorted(glob('data/yolo_detects_6folds/labels/*.txt')):
+            id = os.path.splitext(os.path.basename(p))[0]
+            df = read_label_as_df(p, with_confidence=True)
+            pairs = list(combinations(df.iterrows(), 2))
+            intersection_count = 0
+
+            center_x = np.mean(df[['x0', 'x1']].values.view())
+            center_y = np.mean(df[['y0', 'y1']].values.view())
+
+            # 1. drop by intersection > 0.3
+            for pair in pairs:
+                index1, row1 = pair[0]
+                index2, row2 = pair[1]
+                iou = calc_iou(row1[['x0', 'y0', 'x1', 'y1']], row2[['x0', 'y0', 'x1', 'y1']])
+                if iou > 0.5:
+                    # print(p, iou, row1['label'], row2['label'])
+                    intersection_count += 1
+                    center_x1 = (row1['x1'] + row1['x0']) / 2
+                    center_y1 = (row1['y1'] + row1['y0']) / 2
+                    center_x2 = (row2['x1'] + row2['x0']) / 2
+                    center_y2 = (row2['y1'] + row2['y0']) / 2
+                    len1 = (center_x - center_x1)**2 + (center_y - center_y1)**2
+                    len2 = (center_x - center_x2)**2 + (center_y - center_y2)**2
+                    idx =  index1 if len1 > len2 else index2
+                    df.drop(idx, inplace=True)
+
+            # 2. select nearest 6
+            df['distance'] = 100
+            for idx, row in df.iterrows():
+                center_x1 = (row['x1'] + row['x0']) / 2
+                center_y1 = (row['y1'] + row['y0']) / 2
+                distance = (center_x - center_x1)**2 + (center_y - center_y1)**2
+                df.loc[idx, 'distance'] = distance
+
+            df = df.sort_values('distance').iloc[:6].copy()
+
+            # 3. check label duplication
+            ok = True
+            for label in range(1, 7):
+                b = df[df['label'] == label]
+                if len(b) == 1:
+                    continue
+                if len(b) > 1:
+                    ok = False
+                elif len(b) == 0:
+                    ok = False
+
+            # 3. do re-labeling
+            if not ok:
+                # re-labeling
+                # select left:
+                rows = df[df['x0'].isin(df['x0'].nsmallest(3))]
+                rows = rows.sort_values('y0')
+                df.at[rows.iloc[0].name, 'label'] = 1
+                df.at[rows.iloc[1].name, 'label'] = 2
+                df.at[rows.iloc[2].name, 'label'] = 3
+
+                # select left:
+                rows = df[df['x1'].isin(df['x1'].nlargest(3))]
+                rows = rows.sort_values('y0')
+                df.at[rows.iloc[0].name, 'label'] = 4
+                df.at[rows.iloc[1].name, 'label'] = 5
+                df.at[rows.iloc[2].name, 'label'] = 6
+
+            # 3. re-check label duplication
+            ok = True
+            for label in range(1, 7):
+                b = df[df['label'] == label]
+                if len(b) == 1:
+                    continue
+                if len(b) > 1:
+                    ok = False
+                elif len(b) == 0:
+                    ok = False
+
+            l = len(df)
+            if l != 6 or not ok:
+                print(p, l)
+                print(df)
+
+            df = df.sort_values('label').copy()
+
+            gt_df = gt_dfs[id]
+
+            gt = gt_df[['x0', 'y0', 'x1', 'y1', 'label']].values
+            # [xmin, ymin, xmax, ymax, class_id, difficult, crowd]
+            gt = np.append(gt, np.zeros([6, 2]), axis=1)
+
+            # [xmin, ymin, xmax, ymax, class_id, confidence]
+            pred = df[['x0', 'y0', 'x1', 'y1', 'label', 'conf']].values
+            # pred[:, -1] = 1.0
+            metric_fn.add(pred, gt)
+
+
+            for (bb1, bb2) in zip(gt, pred):
+                bb1 = bb1[:4]
+                bb2 = bb2[:4]
+                iou = calc_iou(bb1, bb2)
+                if iou > 0.5:
+                    correct_50 += 1
+                total += 1
+
+        # plt.hist(counts)
+        # plt.show()
+
+        print(50, correct_50/total)
+
+        print(f"VOC PASCAL mAP: {metric_fn.value(iou_thresholds=0.5, recall_thresholds=np.arange(0., 1.1, 0.1))['mAP']}")
+        print(f"VOC PASCAL mAP in all points: {metric_fn.value(iou_thresholds=0.5)['mAP']}")
+        print(f"COCO mAP: {metric_fn.value(iou_thresholds=np.arange(0.5, 1.0, 0.05), recall_thresholds=np.arange(0., 1.01, 0.01), mpolicy='soft')['mAP']}")
 
 if __name__ == '__main__':
     cli = CLI()
