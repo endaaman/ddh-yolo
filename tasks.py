@@ -24,8 +24,11 @@ def train_all(c):
 def detect_all(c):
     for i in range(6):
         NUM = i + 1
+        SIZE = 'l'
+        NAME= f'{SIZE}_fold{NUM}'
+        W = f'yolov5/runs/train/{SIZE}_fold{NUM}/weights/best.pt'
         cmd = f'python yolov5/detect.py --source "data/folds6/fold{NUM}/test/images/*.jpg"' \
-            f' --weight yolov5/runs/train/fold{NUM}/weights/best.pt --hide-label --name fold{NUM}' \
+            f' --weight {W} --hide-label --name {NAME}' \
             f' --save-txt --exist-ok --save-conf --conf 0.3'
         print(f'CMD: {cmd}')
         invoke.run(cmd)

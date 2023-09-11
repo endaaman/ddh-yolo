@@ -72,6 +72,20 @@ def read_label_as_df(path, with_confidence=False):
     return pd.DataFrame(columns=cols, data=data)
 
 
+def validate_bb(df):
+    ok = True
+    for label in range(1, 7):
+        b = df[df['label'] == label]
+        if len(b) == 1:
+            continue
+        if len(b) > 1:
+            ok = False
+        elif len(b) == 0:
+            ok = False
+    return ok
+
+
+
 # def bbdf_to_str(df):
 #     lines = []
 #     for idx, row in df.iterrows():
@@ -101,6 +115,9 @@ def calc_iou(box1, box2):
     return iou
 
 class CLI(BaseMLCLI):
+    class CommonArgs(BaseMLCLI.CommonArgs):
+        pass
+
     def run_copy(self, a):
         df = pd.read_excel('data/table.xlsx', converters={'label': str})
         for i, row in df.iterrows():
@@ -224,8 +241,14 @@ class CLI(BaseMLCLI):
                     flipped.save(f'{subdir}/images/f{label}.jpg')
                     write_bbs(bbs, f'{subdir}/labels/f{label}.txt')
 
+    class MapArgs(BaseMLCLI.CommonArgs):
+        size: str = 's'
+        nosort: bool = Field(False, cli=('--nosort', ))
 
-    def run_sort_labels(self, a):
+    def run_map(self, a):
+        # DIR = 'data/yolo_detects_6folds/labels'
+        DIR = f'yolov5/runs/detect/{a.size}/labels'
+
         counts = []
         gt_dfs = {}
 
@@ -239,7 +262,7 @@ class CLI(BaseMLCLI):
             df = read_label_as_df(p)
             gt_dfs[id] = df
 
-        for p in sorted(glob('data/yolo_detects_6folds/labels/*.txt')):
+        for p in sorted(glob(f'{DIR}/*.txt')):
             id = os.path.splitext(os.path.basename(p))[0]
             df = read_label_as_df(p, with_confidence=True)
             pairs = list(combinations(df.iterrows(), 2))
@@ -265,7 +288,7 @@ class CLI(BaseMLCLI):
                     idx =  index1 if len1 > len2 else index2
                     df.drop(idx, inplace=True)
 
-            # 2. select nearest 6
+            # 2. sort by distance to center
             df['distance'] = 100
             for idx, row in df.iterrows():
                 center_x1 = (row['x1'] + row['x0']) / 2
@@ -276,18 +299,10 @@ class CLI(BaseMLCLI):
             df = df.sort_values('distance').iloc[:6].copy()
 
             # 3. check label duplication
-            ok = True
-            for label in range(1, 7):
-                b = df[df['label'] == label]
-                if len(b) == 1:
-                    continue
-                if len(b) > 1:
-                    ok = False
-                elif len(b) == 0:
-                    ok = False
+            ok = validate_bb(df)
 
             # 3. do re-labeling
-            if not ok:
+            if not a.nosort and not ok and len(df) >= 6:
                 # re-labeling
                 # select left:
                 rows = df[df['x0'].isin(df['x0'].nsmallest(3))]
@@ -303,16 +318,8 @@ class CLI(BaseMLCLI):
                 df.at[rows.iloc[1].name, 'label'] = 5
                 df.at[rows.iloc[2].name, 'label'] = 6
 
-            # 3. re-check label duplication
-            ok = True
-            for label in range(1, 7):
-                b = df[df['label'] == label]
-                if len(b) == 1:
-                    continue
-                if len(b) > 1:
-                    ok = False
-                elif len(b) == 0:
-                    ok = False
+                # 3. re-check label duplication
+                ok = validate_bb(df)
 
             l = len(df)
             if l != 6 or not ok:
