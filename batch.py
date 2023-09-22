@@ -268,63 +268,74 @@ class CLI(BaseMLCLI):
             pairs = list(combinations(df.iterrows(), 2))
             intersection_count = 0
 
-            center_x = np.mean(df[['x0', 'x1']].values.view())
-            center_y = np.mean(df[['y0', 'y1']].values.view())
+            total_center_x = np.mean(df[['x0', 'x1']].values.view())
+            total_center_y = np.mean(df[['y0', 'y1']].values.view())
 
-            # 1. drop by intersection > 0.3
-            for pair in pairs:
-                index1, row1 = pair[0]
-                index2, row2 = pair[1]
-                iou = calc_iou(row1[['x0', 'y0', 'x1', 'y1']], row2[['x0', 'y0', 'x1', 'y1']])
-                if iou > 0.5:
-                    # print(p, iou, row1['label'], row2['label'])
-                    intersection_count += 1
-                    center_x1 = (row1['x1'] + row1['x0']) / 2
-                    center_y1 = (row1['y1'] + row1['y0']) / 2
-                    center_x2 = (row2['x1'] + row2['x0']) / 2
-                    center_y2 = (row2['y1'] + row2['y0']) / 2
-                    len1 = (center_x - center_x1)**2 + (center_y - center_y1)**2
-                    len2 = (center_x - center_x2)**2 + (center_y - center_y2)**2
-                    idx =  index1 if len1 > len2 else index2
-                    df.drop(idx, inplace=True)
+            if not a.nosort:
+                # 1. drop by intersection > 0.3
+                for pair in pairs:
+                    index1, row1 = pair[0]
+                    index2, row2 = pair[1]
+                    iou = calc_iou(row1[['x0', 'y0', 'x1', 'y1']], row2[['x0', 'y0', 'x1', 'y1']])
+                    if iou > 0.5:
+                        # print(p, iou, row1['label'], row2['label'])
+                        intersection_count += 1
+                        center_x1 = (row1['x1'] + row1['x0']) / 2
+                        center_y1 = (row1['y1'] + row1['y0']) / 2
+                        center_x2 = (row2['x1'] + row2['x0']) / 2
+                        center_y2 = (row2['y1'] + row2['y0']) / 2
+                        len1 = (total_center_x - center_x1)**2 + (total_center_y - center_y1)**2
+                        len2 = (total_center_x - center_x2)**2 + (total_center_y - center_y2)**2
+                        idx =  index1 if len1 > len2 else index2
+                        df.drop(idx, inplace=True)
 
-            # 2. sort by distance to center
-            df['distance'] = 100
-            for idx, row in df.iterrows():
-                center_x1 = (row['x1'] + row['x0']) / 2
-                center_y1 = (row['y1'] + row['y0']) / 2
-                distance = (center_x - center_x1)**2 + (center_y - center_y1)**2
-                df.loc[idx, 'distance'] = distance
-
-            df = df.sort_values('distance').iloc[:6].copy()
-
-            # 3. check label duplication
-            ok = validate_bb(df)
-
-            # 3. do re-labeling
-            if not a.nosort and not ok and len(df) >= 6:
-                # re-labeling
-                # select left:
-                rows = df[df['x0'].isin(df['x0'].nsmallest(3))]
-                rows = rows.sort_values('y0')
-                df.at[rows.iloc[0].name, 'label'] = 1
-                df.at[rows.iloc[1].name, 'label'] = 2
-                df.at[rows.iloc[2].name, 'label'] = 3
-
-                # select left:
-                rows = df[df['x1'].isin(df['x1'].nlargest(3))]
-                rows = rows.sort_values('y0')
-                df.at[rows.iloc[0].name, 'label'] = 4
-                df.at[rows.iloc[1].name, 'label'] = 5
-                df.at[rows.iloc[2].name, 'label'] = 6
-
-                # 3. re-check label duplication
+                # 2. check label duplication
                 ok = validate_bb(df)
 
-            l = len(df)
-            if l != 6 or not ok:
-                print(p, l)
-                print(df)
+                # 3. if not ok and extra ROIs
+                if not ok and len(df) >= 6:
+                    # 4. sort by distance to center
+                    df['x_distance'] = 100
+                    df['y_distance'] = 100
+                    for idx, row in df.iterrows():
+                        center_x = (row['x1'] + row['x0']) / 2
+                        center_y = (row['y1'] + row['y0']) / 2
+                        distance = (center_x - center_x1)**2 + (center_y - center_y1)**2
+                        df.loc[idx, 'x_distance'] = center_x - total_center_x
+                        df.loc[idx, 'y_distance'] = center_y - total_center_y
+                        df.loc[idx, 'distance'] = distance
+
+                    # df = df.sort_values('distance').iloc[:6].copy()
+
+                    # 3. do re-labeling
+                    # select left:
+                    rows = df[df['x_distance'] < 0]
+                    # select 3 nearest ROI
+                    rows = df[df['distance'].isin(rows.sort_values('distance')['distance'].nsmallest(3))]
+
+                    rows = rows.sort_values('y0')
+                    # most top -> 1
+                    df.at[rows.iloc[0].name, 'label'] = 1
+
+                    rows = rows.sort_values('x0')
+                    # most left -> 2
+                    df.at[rows.iloc[0].name, 'label'] = 2
+                    # most right -> 3
+                    df.at[rows.iloc[-1].name, 'label'] = 3
+
+                    # # select right:
+                    # rows = df[df['x_distance'] > 0]
+                    # rows = rows.sort_values('y0')
+                    # df.at[rows.iloc[0].name, 'label'] = 4
+                    # df.at[rows.iloc[1].name, 'label'] = 5
+                    # df.at[rows.iloc[2].name, 'label'] = 6
+
+            # endif not nosort
+
+            # l = len(df)
+            # if l != 6 or not ok:
+            #     print(p, l)
+            #     print(df)
 
             df = df.sort_values('label').copy()
 
