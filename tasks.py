@@ -9,10 +9,12 @@ def train_all(c):
         CFG = f'yolov5/models/yolov5{depth}.yaml',
         for i in range(6):
             num = i + 1
+            if depth == 'l' and i<3:
+                continue
             CFG = f'yolov5/models/yolov5{depth}.yaml'
             YAML = f'fold{num}.yaml'
             NAME = f'{depth}_fold{num}'
-            EPOCH = 100
+            EPOCH = 300
             BATCH_SIZE = 32
             cmd = f'python yolov5/train.py --data {YAML} --cfg {CFG}' \
                 f' --batch-size {BATCH_SIZE} --epochs {EPOCH} --name {NAME}'
