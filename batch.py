@@ -368,6 +368,31 @@ class CLI(BaseMLCLI):
         print(f"VOC PASCAL mAP in all points: {metric_fn.value(iou_thresholds=0.5)['mAP']}")
         print(f"COCO mAP: {metric_fn.value(iou_thresholds=np.arange(0.5, 1.0, 0.05), recall_thresholds=np.arange(0., 1.01, 0.01), mpolicy='soft')['mAP']}")
 
+
+    def run_map_from_dir(self, a):
+        data = {}
+        dfs = {}
+        for size, in ['s', 'm', 'l']:
+            mm = {
+                'mAP50': [],
+                'mAP95': [],
+            }
+            for num in range(6):
+                fold = num + 1
+                p = f'yolov5/runs/train/{size}_fold{fold}/results.csv'
+                metrics = pd.read_csv(p)
+                mm['mAP50'].append(metrics['     metrics/mAP_0.5'].max())
+                mm['mAP95'].append(metrics['metrics/mAP_0.5:0.95'].max())
+            # data[size]['mAP50'] = data[size]['mAP50'].mean()
+            # data[size]['mAP95'] = data[size]['mAP95'].mean()
+            dfs[size] = pd.DataFrame(mm)
+        print(dfs)
+
+        with pd.ExcelWriter('out/mAP.xlsx') as writer:
+            for size, df in dfs.items():
+                df.to_excel(writer, sheet_name=size)
+
+
 if __name__ == '__main__':
     cli = CLI()
     cli.run()
